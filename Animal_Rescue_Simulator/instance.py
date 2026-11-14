@@ -59,9 +59,6 @@ def generate_instance(config):
         Animal(i, rng.choice(SPECIES), rng.randint(1, 3), node, True)
         for i, node in enumerate(animal_nodes)
     ]
-    #animal not reachable
-    if any(cell not in reachable for cell in animals):
-            raise ValueError("An animal cell is unreachable from base")
 
     accepted_sets = [
         {sp for sp in SPECIES if rng.random() < 0.5} for _ in cells
