@@ -1,11 +1,12 @@
 import math
 
-ReadMap = {"Road": 0, "Wall": 1, "Base": 2, "Shelter": 3, "Animal": 4, "Overflow": 5}
+ReadMap = {"Road": 0, "Wall": 1, "Base": 2, "Shelter": 3, "Animal": 4, "Overflow": 5, "Rough Road": 6}
 ROAD = ReadMap["Road"]
 WALL = ReadMap["Wall"]
 BASE = ReadMap["Base"]
 SHELTER = ReadMap["Shelter"]
 OVERFLOW = ReadMap["Overflow"]
+ROUGH_ROAD = ReadMap["Rough Road"]
 
 PICKUP = "PICKUP"
 DROP = "DROP"
@@ -13,7 +14,7 @@ RETURN = "RETURN"
 
 
 class Config:
-    def __init__(self, map_size=5, num_vehicles=1, capacity_mode="GENERIC", w_dist=1.0, w_sev=1.0, w_over=1000.0, seed=42, num_animals=4, vehicle_capacity=5, pickup_time=1.0, drop_time=1.0):
+    def __init__(self, map_size=5, num_vehicles=1, capacity_mode="GENERIC", w_dist=1.0, w_sev=1.0, w_over=1000.0, seed=42, num_animals=4, vehicle_capacity=5, pickup_time=1.0, drop_time=1.0, rough_cost = 3.0):
         self.map_size = map_size
         self.num_vehicles = num_vehicles
         self.capacity_mode = capacity_mode
@@ -25,6 +26,7 @@ class Config:
         self.vehicle_capacity = vehicle_capacity
         self.pickup_time = pickup_time
         self.drop_time = drop_time
+        self.rough_cost = rough_cost
 
 
 class Map:
@@ -34,6 +36,7 @@ class Map:
         self.cols = len(self.grid[0])
         self.base_node = self._find_first(BASE)
         self.overflow_node = self._find_first(OVERFLOW)
+        
         self.nodes = []
         self.edges = {}
         self._build_graph()
@@ -46,7 +49,8 @@ class Map:
         return None
 
     def _get_step_cost(self, node):
-        return 1
+        r, c = node
+        return self.rough_cost if self.grid[r][c] == ROUGH_ROAD else 1.0
 
     def _build_graph(self):
         for r in range(self.rows):
@@ -77,41 +81,42 @@ class Animal:
 
 
 class Shelter:
-    def __init__(self, id, node, accepted_species, capacity, is_overflow=False):
+    def __init__(self, id, node, capacities, is_overflow=False):
         self.id = id
         self.node = node
-        self.accepted_species = frozenset(accepted_species)
         self.is_overflow = is_overflow
-        self.initial_capacity = capacity
-        self.remaining_capacity = capacity
+        self.initial = dict(capacities)
+        self.remaining_spaces = dict(capacities)
 
     def accepts_species(self, species):
-        return self.is_overflow or species in self.accepted_species
-
-    def can_accept(self, animal):
-        return self.accepts_species(animal.species) and self.remaining(animal) > 0
+        return self.is_overflow or species in self.initial
 
     def remaining(self, animal):
         if self.is_overflow:
             return math.inf
-        return self.remaining_capacity
+        return self.remaining_spaces.get(animal.species, 0)
+
+    def can_accept(self, animal):
+        return self.accepts_species(animal.species) and self.remaining(animal) > 0
 
     def place(self, animal):
-        if not self.is_overflow:
-            self.remaining_capacity -= 1
+        if self.is_overflow:
+            return
+        if self.remaining_spaces[animal.species] <= 0:
+            raise ValueError(f"Shelter {self.id} is full for {animal.species}")
+        self.remaining_spaces[animal.species] -= 1
 
     def release(self, animal):
         if not self.is_overflow:
-            self.remaining_capacity += 1
+            self.remaining_spaces[animal.species] += 1
 
     def reset(self):
-        self.remaining_capacity = self.initial_capacity
+        self.remaining_spaces = dict(self.initial)
 
     def clone(self):
-        cloned = Shelter(self.id, self.node, self.accepted_species, self.initial_capacity, self.is_overflow)
-        cloned.remaining_capacity = self.remaining_capacity
+        cloned = Shelter(self.id, self.node, self.initial, self.is_overflow)
+        cloned.remaining_spaces = dict(self.remaining_spaces)
         return cloned
-
 
 class Vehicle:
     def __init__(self, id, capacity, base_node):
@@ -182,11 +187,13 @@ class Problem:
         counts = {}
         for aid, sid in solution.assignment.items():
             shelter = self.shelter_map.get(sid)
-            if shelter is None or not shelter.accepts_species(self.animal_map[aid].species):
+            animal = self.animal_map[aid]
+            if shelter is None or not shelter.accepts_species(animal.species):
                 return False
             if not shelter.is_overflow:
-                counts[sid] = counts.get(sid, 0) + 1
-                if counts[sid] > shelter.initial_capacity:
+                key = (sid, animal.species)
+                counts[key] = counts.get(key, 0) + 1
+                if counts[key] > shelter.initial[animal.species]:
                     return False
         if len(solution.routes) != len(self.vehicles):
             return False
